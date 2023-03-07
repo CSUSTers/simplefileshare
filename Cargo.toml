@@ -2,9 +2,13 @@
 name = "simplefileshare"
 version = "0.1.0"
 edition = "2021"
+authors = ["Hugefiver", "Anthony Hoo"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 axum = "0.6.10"
+clap = { version = "4.1.8", features = ["derive"] }
 diesel = {version = "2.0.3", features = ["sqlite"]}
+serde = { version = "1.0.152", features = ["derive", "serde_derive"] }
+tokio = {version = "1.26.0", features = ["full"]}
