@@ -7,8 +7,15 @@ authors = ["Hugefiver", "Anthony Hoo"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-axum = "0.6.10"
+axum = { version = "0.6.10", features = ["macros", "multipart", "ws", "headers", "http2"] }
 clap = { version = "4.1.8", features = ["derive"] }
-diesel = {version = "2.0.3", features = ["sqlite"]}
+lazy = "0.5.3"
+num = "0.4.0"
+rand = "0.8.5"
+regex = "1.7.1"
 serde = { version = "1.0.152", features = ["derive", "serde_derive"] }
+serde_json = "1.0.94"
+sqlx = { version = "0.6.2", features = ["runtime-tokio", "sqlite", "uuid", "macros", "chrono", "offline"] }
 tokio = {version = "1.26.0", features = ["full"]}
+tower = { version = "0.4.13", features = ["full", "tokio"] }
+xxhash-rust = { version = "0.8.6", features = ["const_xxh3", "xxh3"] }
