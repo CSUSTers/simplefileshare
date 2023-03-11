@@ -2,7 +2,7 @@ use rand::{self, Rng};
 use xxhash_rust as xxh;
 
 pub fn ramdom_string(len: usize) -> String {
-    const alphas: &'static str = concat!('a'..='z', 'A'..='Z', '0'..='9').to_string();
+    const alphas: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".to_string();
     let mut rng = rand::thread_rng();
     (0..len)
         .map(|_| alphas.chars().nth(rng.gen_range(0..alphas.len())).unwrap())

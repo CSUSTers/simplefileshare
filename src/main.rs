@@ -1,17 +1,19 @@
 mod utils;
 
-use std::{collections::HashMap, env::join_paths, iter::Map, path::Path, sync::Arc};
+use std::fmt::Error;
+use std::future::Future;
+use std::path::Path;
+use std::sync::Arc;
 
 use axum::{
     body::StreamBody,
     extract,
     http::{header, Request, Response, StatusCode},
-    response,
     routing::*,
-    Extension, Json, RequestExt, Router,
+    Extension, Router,
 };
 use clap::Parser;
-use sqlx::{sqlx_macros, Database, Row};
+use sqlx::{Database, Row};
 use tokio::fs;
 
 #[derive(Debug, Clone, Parser)]
@@ -27,10 +29,11 @@ struct Config {
     store_file_path: String,
 }
 
-#[derive(Debug, Clone, Send)]
-struct AppState {
-    store_file_path: &str,
-    db: Arc<Database>,
+#[derive(Debug, Clone)]
+struct AppState<'a, D>
+    where D: Database {
+    store_file_path: &'a str,
+    db: Arc<D>,
 }
 
 #[tokio::main]
@@ -70,8 +73,8 @@ struct UploadResponse {
     id: String,
 }
 
-async fn upload(
-    Extension(mut state): Extension<AppState>,
+async fn upload<D: Database>(
+    Extension(mut state): Extension<AppState<'_, D>>,
     extract::Query(param): extract::Query<UploadQuery>,
     req: Request<extract::Multipart>,
 ) -> Result<Response<UploadResponse>, (StatusCode, String)> {
@@ -104,7 +107,7 @@ async fn upload(
             }
 
             let token = match param.token.unwrap_or_default() {
-                x if utils::check_token(s, 6, 32) => x,
+                x if utils::check_token(&x, 6, 32) => x,
                 _ => utils::ramdom_string(12),
             };
 
@@ -119,7 +122,7 @@ async fn upload(
                 return Err((StatusCode::BAD_REQUEST, "Bad Request".to_string()));
             }
 
-            let store_file_name = utils::hashed_filename(s);
+            let store_file_name = utils::hashed_filename(file_name);
             fs::write(Path::join(state.store_file_path, file_name), file)
                 .await
                 .map_err(|_| {
@@ -158,18 +161,19 @@ struct DownloadQuery {
     token: Option<String>,
 }
 
-async fn dowload(
+async fn download<D>(
     id: String,
-    state: Extension<AppState>,
-    req: Request<Body>,
-) -> Result<Response<StreamBody>, (StatusCode, String)> {
-    if !utils::check_token(s, 6, 32) {
+    state: Extension<AppState<'_, D>>,
+    req: DownloadQuery,
+) -> Result<Response<StreamBody<impl Future>>, (StatusCode, String)>
+    where D: Database {
+    if !utils::check_token(req.token, 6, 32) {
         return Err((StatusCode::NOT_FOUND, "404 Not Found".to_string()));
     }
 
     let file = match sqlx::query("SELECT name FROM files WHERE store_name = ? AND token = ?")
         .bind(id)
-        .bind(token)
+        .bind(req.token)
         .fetch_one(state.db)
         .await as Result<Row, _>
     {
@@ -182,7 +186,7 @@ async fn dowload(
     fs::try_exists(path)
         .await
         .map(|_| {
-            let body = fs::read(fs);
+            let body = fs::read(path);
             Response::builder()
                 .status(StatusCode::OK)
                 .header(
