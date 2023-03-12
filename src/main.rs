@@ -1,6 +1,5 @@
 mod utils;
 
-use std::fmt::Error;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
@@ -13,7 +12,7 @@ use axum::{
     Extension, Router,
 };
 use clap::Parser;
-use sqlx::{Database, Row};
+use sqlx::{Database, Row, sqlite::SqlitePoolOptions, Sqlite};
 use tokio::fs;
 
 #[derive(Debug, Clone, Parser)]
@@ -30,20 +29,19 @@ struct Config {
 }
 
 #[derive(Debug, Clone)]
-struct AppState<'a, D>
-    where D: Database {
+struct AppState<'a> {
     store_file_path: &'a str,
-    db: Arc<D>,
+    db: Arc<sqlx::Pool<sqlx::Any>>,
 }
 
 #[tokio::main]
 async fn main() {
     let arg = Config::parse();
-
-    let mut db = sqlx::SqlitePool::connect_lazy(&arg.db_path).await.unwrap();
+    
+    let mut db = sqlx::AnyPool::connect_lazy(&format!("sqlite://{}", arg.db_path)).unwrap();
 
     let state = AppState {
-        store_file_path: arg.store_file_path.into(),
+        store_file_path: arg.store_file_path.to_owned().as_ref(),
         db: Arc::new(db),
     };
     let app = Router::new()
@@ -51,7 +49,7 @@ async fn main() {
         .route("/download/:id", get(download))
         .with_state(state);
 
-    let result = axum::Server::bind(arg.bind.parse().unwrap())
+    let result = axum::Server::bind(&arg.bind.parse().unwrap())
         .serve(app.into_make_service())
         .await;
     match result {
@@ -73,8 +71,8 @@ struct UploadResponse {
     id: String,
 }
 
-async fn upload<D: Database>(
-    Extension(mut state): Extension<AppState<'_, D>>,
+async fn upload(
+    Extension(mut state): Extension<AppState<'_>>,
     extract::Query(param): extract::Query<UploadQuery>,
     req: Request<extract::Multipart>,
 ) -> Result<Response<UploadResponse>, (StatusCode, String)> {
@@ -89,11 +87,11 @@ async fn upload<D: Database>(
 
             match sqlx::query("SELECT count(id) FROM users WHERE uuid = ? AND enabled = 1")
                 .bind(user)
-                .fetch_one(&mut state.db)
+                .fetch_one(&*state.db)
                 .await
             {
-                Ok(rows) => {
-                    let c = (rows as Row).get(0) as i32;
+                Ok(row) => {
+                    let c = row.get(0) as i32;
                     if c == 0 {
                         return Err((StatusCode::FORBIDDEN, "403 For Biden".to_string()));
                     }
@@ -123,7 +121,7 @@ async fn upload<D: Database>(
             }
 
             let store_file_name = utils::hashed_filename(file_name);
-            fs::write(Path::join(state.store_file_path, file_name), file)
+            fs::write(Path::new(state.store_file_path).join(file_name), file)
                 .await
                 .map_err(|_| {
                     Error(
@@ -161,28 +159,27 @@ struct DownloadQuery {
     token: Option<String>,
 }
 
-async fn download<D>(
+async fn download(
     id: String,
-    state: Extension<AppState<'_, D>>,
+    state: Extension<AppState<'_>>,
     req: DownloadQuery,
-) -> Result<Response<StreamBody<impl Future>>, (StatusCode, String)>
-    where D: Database {
-    if !utils::check_token(req.token, 6, 32) {
+) -> Result<Response<StreamBody<impl Future>>, (StatusCode, String)> {
+    if !utils::check_token(&req.token.unwrap_or_default(), 6, 32) {
         return Err((StatusCode::NOT_FOUND, "404 Not Found".to_string()));
     }
 
     let file = match sqlx::query("SELECT name FROM files WHERE store_name = ? AND token = ?")
         .bind(id)
         .bind(req.token)
-        .fetch_one(state.db)
-        .await as Result<Row, _>
+        .fetch_one(&*state.db)
+        .await
     {
         Ok(x) => x.get(0) as String,
         _ => {
             return Err((StatusCode::NOT_FOUND, "404 Not Found".to_string()));
         }
     };
-    let path = Path::join(state.store_file_path, file);
+    let path = Path::new(state.store_file_path).join(file);
     fs::try_exists(path)
         .await
         .map(|_| {

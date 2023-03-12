@@ -2,7 +2,7 @@ use rand::{self, Rng};
 use xxhash_rust as xxh;
 
 pub fn ramdom_string(len: usize) -> String {
-    const alphas: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".to_string();
+    const alphas: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let mut rng = rand::thread_rng();
     (0..len)
         .map(|_| alphas.chars().nth(rng.gen_range(0..alphas.len())).unwrap())
@@ -10,7 +10,7 @@ pub fn ramdom_string(len: usize) -> String {
 }
 
 pub fn hashed_filename(s: &str) -> String {
-    let salt = rand::thread_rng().gen::<u128>();
+    let salt = rand::thread_rng().gen::<u64>();
     let h = xxh::xxh3::xxh3_128_with_seed(s.as_bytes(), salt);
     format!("{:x}", h)
 }
