@@ -1,6 +1,5 @@
 mod utils;
 
-use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -12,7 +11,7 @@ use axum::{
     Extension, Router,
 };
 use clap::Parser;
-use sqlx::{Database, Row, sqlite::SqlitePoolOptions, Sqlite};
+use sqlx::Row;
 use tokio::fs;
 
 #[derive(Debug, Clone, Parser)]
@@ -29,19 +28,19 @@ struct Config {
 }
 
 #[derive(Debug, Clone)]
-struct AppState<'a> {
-    store_file_path: &'a str,
+struct AppState {
+    store_file_path: String,
     db: Arc<sqlx::Pool<sqlx::Any>>,
 }
 
 #[tokio::main]
 async fn main() {
     let arg = Config::parse();
-    
+
     let mut db = sqlx::AnyPool::connect_lazy(&format!("sqlite://{}", arg.db_path)).unwrap();
 
     let state = AppState {
-        store_file_path: arg.store_file_path.to_owned().as_ref(),
+        store_file_path: arg.store_file_path.to_owned(),
         db: Arc::new(db),
     };
     let app = Router::new()
@@ -72,7 +71,7 @@ struct UploadResponse {
 }
 
 async fn upload(
-    Extension(mut state): Extension<AppState<'_>>,
+    Extension(mut state): Extension<AppState>,
     extract::Query(param): extract::Query<UploadQuery>,
     req: Request<extract::Multipart>,
 ) -> Result<Response<UploadResponse>, (StatusCode, String)> {
@@ -82,7 +81,7 @@ async fn upload(
         if let Some(user) = parts.headers.get("user-uuid") {
             let user = user.to_str().unwrap();
             if !utils::check_uuid(user) {
-                return Err((StatusCode::FORBIDDEN, "403 For Biden".to_string()));
+                return Err((StatusCode::FORBIDDEN, "403 For Biden".to_owned()));
             }
 
             match sqlx::query("SELECT count(id) FROM users WHERE uuid = ? AND enabled = 1")
@@ -99,7 +98,7 @@ async fn upload(
                 Err(_) => {
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        "500 Server Error".to_string(),
+                        "500 Server Error".to_owned(),
                     ))
                 }
             }
@@ -116,19 +115,22 @@ async fn upload(
                 }
             };
             let file_name = file.file_name().unwrap_or_default();
-            if file_name.is_empty() || file_name > 255 {
-                return Err((StatusCode::BAD_REQUEST, "Bad Request".to_string()));
+            if file_name.is_empty() || file_name.len() > 255 {
+                return Err((StatusCode::BAD_REQUEST, "Bad Request".to_owned()));
             }
 
             let store_file_name = utils::hashed_filename(file_name);
-            fs::write(Path::new(state.store_file_path).join(file_name), file)
-                .await
-                .map_err(|_| {
-                    Error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "500 Server Error".to_string(),
-                    )
-                })?;
+            fs::write(
+                Path::new(&state.store_file_path).join(file_name),
+                file.into(),
+            )
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "500 Server Error".to_string(),
+                )
+            })?;
             sqlx::query(
                 "INSERT INTO files (name, token, user_uuid, store_name) VALUES (?, ?, ?, ?)",
             )
@@ -136,19 +138,22 @@ async fn upload(
             .bind(token)
             .bind(user)
             .bind(store_file_name)
-            .execute(state.db)
+            .execute(&*state.db)
             .await
             .map_err(|_| {
-                Error(
+                (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "500 Server Error".to_string(),
                 )
             })?;
 
-            Ok(Response::new(UploadResponse {
-                token,
-                id: store_file_name,
-            }))
+            return Ok(Response::builder()
+                .status(200)
+                .body(UploadResponse {
+                    token,
+                    id: store_file_name,
+                })
+                .unwrap());
         }
     }
     Err((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()))
@@ -161,14 +166,14 @@ struct DownloadQuery {
 
 async fn download(
     id: String,
-    state: Extension<AppState<'_>>,
+    state: Extension<AppState>,
     req: DownloadQuery,
-) -> Result<Response<StreamBody<impl Future>>, (StatusCode, String)> {
+) -> Result<Response<StreamBody<dyn futures_core::stream::Stream<Item = u8>>>, (StatusCode, String)> {
     if !utils::check_token(&req.token.unwrap_or_default(), 6, 32) {
-        return Err((StatusCode::NOT_FOUND, "404 Not Found".to_string()));
+        return Err((StatusCode::NOT_FOUND, "404 Not Found".to_owned()));
     }
 
-    let file = match sqlx::query("SELECT name FROM files WHERE store_name = ? AND token = ?")
+    let filename = match sqlx::query("SELECT name FROM files WHERE store_name = ? AND token = ?")
         .bind(id)
         .bind(req.token)
         .fetch_one(&*state.db)
@@ -179,19 +184,21 @@ async fn download(
             return Err((StatusCode::NOT_FOUND, "404 Not Found".to_string()));
         }
     };
-    let path = Path::new(state.store_file_path).join(file);
-    fs::try_exists(path)
+    let path = Path::new(&state.store_file_path).join(filename);
+    fs::try_exists(&path)
         .await
-        .map(|_| {
-            let body = fs::read(path);
+        .and(fs::File::open(&path).await)
+        .map(move |file| {
+            let stream = tokio_util::io::ReaderStream::new(file);
+            let body = StreamBody::new(stream);
             Response::builder()
                 .status(StatusCode::OK)
                 .header(
                     header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"{}\"", file),
+                    format!("attachment; filename=\"{}\"", filename),
                 )
                 .body(body)
                 .unwrap()
         })
-        .map_err(|_| Error((StatusCode::NOT_FOUND, "404 Not Found".to_string())))
+        .map_err(|_| (StatusCode::NOT_FOUND, "404 Not Found".to_string()))
 }
