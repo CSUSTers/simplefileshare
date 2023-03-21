@@ -120,17 +120,17 @@ async fn upload(
             }
 
             let store_file_name = utils::hashed_filename(file_name);
-            fs::write(
-                Path::new(&state.store_file_path).join(file_name),
-                file.into(),
-            )
-            .await
-            .map_err(|_| {
+            let f = fs::File::create(Path::new(&state.store_file_path).join(file_name))
+                .await
+                .unwrap();
+            let stream = tokio_util::io::StreamReader::new(file);
+            tokio::io::copy(&mut stream, &mut f).await.map_err(|_| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "500 Server Error".to_string(),
                 )
             })?;
+
             sqlx::query(
                 "INSERT INTO files (name, token, user_uuid, store_name) VALUES (?, ?, ?, ?)",
             )
@@ -168,7 +168,8 @@ async fn download(
     id: String,
     state: Extension<AppState>,
     req: DownloadQuery,
-) -> Result<Response<StreamBody<dyn futures_core::stream::Stream<Item = u8>>>, (StatusCode, String)> {
+) -> Result<Response<StreamBody<(dyn futures_core::Stream<Item = u8> + 'static)>>, (StatusCode, String)>
+{
     if !utils::check_token(&req.token.unwrap_or_default(), 6, 32) {
         return Err((StatusCode::NOT_FOUND, "404 Not Found".to_owned()));
     }
