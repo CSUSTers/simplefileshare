@@ -12,7 +12,8 @@ use axum::{
 };
 use clap::Parser;
 use sqlx::Row;
-use tokio::fs;
+use tokio::{fs, io::AsyncRead};
+use tokio_util::io::ReaderStream;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "simplefileshare", author, version, long_about = None)]
@@ -168,7 +169,7 @@ async fn download(
     id: String,
     state: Extension<AppState>,
     req: DownloadQuery,
-) -> Result<Response<StreamBody<(dyn futures_core::Stream<Item = u8> + 'static)>>, (StatusCode, String)>
+) -> Result<Response<StreamBody<ReaderStream<impl AsyncRead>>>, (StatusCode, String)>
 {
     if !utils::check_token(&req.token.unwrap_or_default(), 6, 32) {
         return Err((StatusCode::NOT_FOUND, "404 Not Found".to_owned()));
