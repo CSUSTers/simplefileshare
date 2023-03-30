@@ -4,13 +4,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
-    body::StreamBody,
-    extract,
+    body::{StreamBody, Bytes},
+    extract::{self, multipart::Field},
     http::{header, Request, Response, StatusCode},
     routing::*,
     Extension, Router,
 };
 use clap::Parser;
+use futures_core::Stream;
+use futures_util::TryStreamExt;
 use sqlx::Row;
 use tokio::{fs, io::AsyncRead};
 use tokio_util::io::ReaderStream;
@@ -124,7 +126,7 @@ async fn upload(
             let f = fs::File::create(Path::new(&state.store_file_path).join(file_name))
                 .await
                 .unwrap();
-            let stream = tokio_util::io::StreamReader::new(file);
+            let stream = tokio_util::io::StreamReader::<(dyn Stream<Item = Result<Bytes, std::io::Error>> + Sized), _>::new(file.map_err(|e| async {e.into()}));
             tokio::io::copy(&mut stream, &mut f).await.map_err(|_| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
