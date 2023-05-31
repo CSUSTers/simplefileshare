@@ -2,10 +2,10 @@ use rand::{self, Rng};
 use xxhash_rust as xxh;
 
 pub fn ramdom_string(len: usize) -> String {
-    const alphas: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const ALPHAS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let mut rng = rand::thread_rng();
     (0..len)
-        .map(|_| alphas.chars().nth(rng.gen_range(0..alphas.len())).unwrap())
+        .map(|_| ALPHAS.chars().nth(rng.gen_range(0..ALPHAS.len())).unwrap())
         .collect()
 }
 

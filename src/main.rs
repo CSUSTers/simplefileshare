@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use axum::{
     body::StreamBody,
-    extract,
-    http::{header, Request, Response, StatusCode},
+    extract::{self, Multipart, Query, State},
+    http::{header, HeaderMap, Response, StatusCode},
     routing::*,
-    Extension, Router,
+    Json, Router,
 };
 use clap::Parser;
 
@@ -35,23 +35,23 @@ struct Config {
 #[derive(Debug, Clone)]
 struct AppState {
     store_file_path: String,
-    db: Arc<sqlx::Pool<sqlx::Any>>,
+    db: sqlx::Pool<sqlx::Any>,
 }
 
 #[tokio::main]
 async fn main() {
     let arg = Config::parse();
 
-    let mut db = sqlx::AnyPool::connect_lazy(&format!("sqlite://{}", arg.db_path)).unwrap();
+    let db = sqlx::AnyPool::connect_lazy(&format!("sqlite://{}", arg.db_path)).unwrap();
 
     let state = AppState {
         store_file_path: arg.store_file_path.to_owned(),
-        db: Arc::new(db),
+        db,
     };
     let app = Router::new()
         .route("/upload", post(upload))
         .route("/download/:id", get(download))
-        .with_state(state);
+        .with_state(Arc::new(state));
 
     let result = axum::Server::bind(&arg.bind.parse().unwrap())
         .serve(app.into_make_service())
@@ -75,78 +75,61 @@ struct UploadResponse {
     id: String,
 }
 
+#[axum::debug_handler]
 async fn upload(
-    Extension(state): Extension<AppState>,
-    extract::Query(param): extract::Query<UploadQuery>,
-    req: Request<extract::Multipart>,
-) -> Result<Response<UploadResponse>, (StatusCode, String)> {
-    if let Some(_) = req.headers().get("user-uuid") {
-        let (parts, mut body) = req.into_parts();
+    header: HeaderMap,
+    Query(param): Query<UploadQuery>,
+    State(state): State<Arc<AppState>>,
+    mut body: Multipart,
+) -> Result<Json<UploadResponse>, (StatusCode, String)> {
+    if let Some(user) = header.get("user-uuid") {
+        let user = user.to_str().unwrap();
+        if !utils::check_uuid(user) {
+            return Err((StatusCode::FORBIDDEN, "403 For Biden".to_owned()));
+        }
 
-        if let Some(user) = parts.headers.get("user-uuid") {
-            let user = user.to_str().unwrap();
-            if !utils::check_uuid(user) {
-                return Err((StatusCode::FORBIDDEN, "403 For Biden".to_owned()));
-            }
-
-            match sqlx::query("SELECT count(id) FROM users WHERE uuid = ? AND enabled = 1")
-                .bind(user)
-                .fetch_one(&*state.db)
-                .await
-            {
-                Ok(row) => {
-                    let c: i32 = row.get(0);
-                    if c == 0 {
-                        return Err((StatusCode::FORBIDDEN, "403 For Biden".to_string()));
-                    }
-                }
-                Err(_) => {
-                    return Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "500 Server Error".to_owned(),
-                    ))
+        match sqlx::query("SELECT count(id) FROM users WHERE uuid = ? AND enabled = 1")
+            .bind(user)
+            .fetch_one(&state.db)
+            .await
+        {
+            Ok(row) => {
+                let c: i32 = row.get(0);
+                if c == 0 {
+                    return Err((StatusCode::FORBIDDEN, "403 For Biden".to_string()));
                 }
             }
-
-            let token = match param.token.unwrap_or_default() {
-                x if utils::check_token(&x, 6, 32) => x,
-                _ => utils::ramdom_string(12),
-            };
-
-            let file = match body.next_field().await {
-                Ok(Some(x)) => x,
-                _ => {
-                    return Err((StatusCode::BAD_REQUEST, "Bad Request".to_string()));
-                }
-            };
-            let file_name = file.file_name().unwrap_or_default().to_owned();
-            if file_name.is_empty() || file_name.len() > 255 {
-                return Err((StatusCode::BAD_REQUEST, "Bad Request".to_owned()));
+            Err(_) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "500 Server Error".to_owned(),
+                ))
             }
+        }
 
-            let store_file_name = utils::hashed_filename(&file_name);
-            let mut f = fs::File::create(Path::new(&state.store_file_path).join(&file_name))
-                .await
-                .unwrap();
+        let token = match param.token.unwrap_or_default() {
+            x if utils::check_token(&x, 6, 32) => x,
+            _ => utils::ramdom_string(12),
+        };
 
-            let mut reader = StreamReader::new(file.map_err(|e| tokio::io::Error::other(e)));
-            tokio::io::copy_buf(&mut reader, &mut f)
-                .await
-                .map_err(|_| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "500 Server Error".to_string(),
-                    )
-                })?;
+        let file = match body.next_field().await {
+            Ok(Some(x)) => x,
+            _ => {
+                return Err((StatusCode::BAD_REQUEST, "Bad Request".to_string()));
+            }
+        };
+        let file_name = file.file_name().unwrap_or_default().to_owned();
+        if file_name.is_empty() || file_name.len() > 255 {
+            return Err((StatusCode::BAD_REQUEST, "Bad Request".to_owned()));
+        }
 
-            sqlx::query(
-                "INSERT INTO files (name, token, user_uuid, store_name) VALUES (?, ?, ?, ?)",
-            )
-            .bind(&file_name)
-            .bind(&token)
-            .bind(&user)
-            .bind(&store_file_name)
-            .execute(&*state.db)
+        let store_file_name = utils::hashed_filename(&file_name);
+        let mut f = fs::File::create(Path::new(&state.store_file_path).join(&file_name))
+            .await
+            .unwrap();
+
+        let mut reader = StreamReader::new(file.map_err(|e| tokio::io::Error::other(e)));
+        tokio::io::copy_buf(&mut reader, &mut f)
             .await
             .map_err(|_| {
                 (
@@ -155,14 +138,25 @@ async fn upload(
                 )
             })?;
 
-            return Ok(Response::builder()
-                .status(200)
-                .body(UploadResponse {
-                    token,
-                    id: store_file_name,
-                })
-                .unwrap());
+        sqlx::query("INSERT INTO files (name, token, user_uuid, store_name) VALUES (?, ?, ?, ?)")
+            .bind(&file_name)
+            .bind(&token)
+            .bind(&user)
+            .bind(&store_file_name)
+            .execute(&state.db)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "500 Server Error".to_string(),
+                )
+            })?;
+
+        return Ok(UploadResponse {
+            token,
+            id: store_file_name,
         }
+        .into());
     }
     Err((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()))
 }
@@ -172,10 +166,11 @@ struct DownloadQuery {
     token: Option<String>,
 }
 
+#[axum::debug_handler]
 async fn download(
-    id: String,
-    state: Extension<AppState>,
-    mut req: DownloadQuery,
+    extract::Path(id): extract::Path<String>,
+    Query(mut req): Query<DownloadQuery>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Response<StreamBody<ReaderStream<impl AsyncRead>>>, (StatusCode, String)> {
     let token = req.token.take().unwrap_or_default();
 
@@ -184,9 +179,9 @@ async fn download(
     }
 
     let filename = match sqlx::query("SELECT name FROM files WHERE store_name = ? AND token = ?")
-        .bind(id)
+        .bind(id.as_str())
         .bind(&token)
-        .fetch_one(&*state.db)
+        .fetch_one(&state.db)
         .await
     {
         Ok(x) => x.get::<String, _>(0),
