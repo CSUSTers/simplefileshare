@@ -1,21 +1,23 @@
+#![feature(io_error_other)]
+
 mod utils;
 
 use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
-    body::{StreamBody, Bytes},
-    extract::{self, multipart::Field},
+    body::StreamBody,
+    extract,
     http::{header, Request, Response, StatusCode},
     routing::*,
     Extension, Router,
 };
 use clap::Parser;
-use futures_core::Stream;
+
 use futures_util::TryStreamExt;
 use sqlx::Row;
 use tokio::{fs, io::AsyncRead};
-use tokio_util::io::ReaderStream;
+use tokio_util::io::{ReaderStream, StreamReader};
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "simplefileshare", author, version, long_about = None)]
@@ -126,13 +128,16 @@ async fn upload(
             let f = fs::File::create(Path::new(&state.store_file_path).join(file_name))
                 .await
                 .unwrap();
-            let stream = tokio_util::io::StreamReader::<(dyn Stream<Item = Result<Bytes, std::io::Error>> + Sized), _>::new(file.map_err(|e| async {e.into()}));
-            tokio::io::copy(&mut stream, &mut f).await.map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "500 Server Error".to_string(),
-                )
-            })?;
+
+            let mut reader = StreamReader::new(file.map_err(|e| tokio::io::Error::other(e)));
+            tokio::io::copy_buf(&mut reader, &mut f)
+                .await
+                .map_err(|_| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "500 Server Error".to_string(),
+                    )
+                })?;
 
             sqlx::query(
                 "INSERT INTO files (name, token, user_uuid, store_name) VALUES (?, ?, ?, ?)",
@@ -171,8 +176,7 @@ async fn download(
     id: String,
     state: Extension<AppState>,
     req: DownloadQuery,
-) -> Result<Response<StreamBody<ReaderStream<impl AsyncRead>>>, (StatusCode, String)>
-{
+) -> Result<Response<StreamBody<ReaderStream<impl AsyncRead>>>, (StatusCode, String)> {
     if !utils::check_token(&req.token.unwrap_or_default(), 6, 32) {
         return Err((StatusCode::NOT_FOUND, "404 Not Found".to_owned()));
     }
