@@ -76,11 +76,11 @@ struct UploadResponse {
 }
 
 async fn upload(
-    Extension(mut state): Extension<AppState>,
+    Extension(state): Extension<AppState>,
     extract::Query(param): extract::Query<UploadQuery>,
     req: Request<extract::Multipart>,
 ) -> Result<Response<UploadResponse>, (StatusCode, String)> {
-    if let Some(user) = req.headers().get("user-uuid") {
+    if let Some(_) = req.headers().get("user-uuid") {
         let (parts, mut body) = req.into_parts();
 
         if let Some(user) = parts.headers.get("user-uuid") {
@@ -95,7 +95,7 @@ async fn upload(
                 .await
             {
                 Ok(row) => {
-                    let c = row.get(0) as i32;
+                    let c: i32 = row.get(0);
                     if c == 0 {
                         return Err((StatusCode::FORBIDDEN, "403 For Biden".to_string()));
                     }
@@ -113,19 +113,19 @@ async fn upload(
                 _ => utils::ramdom_string(12),
             };
 
-            let mut file = match body.next_field().await {
+            let file = match body.next_field().await {
                 Ok(Some(x)) => x,
                 _ => {
                     return Err((StatusCode::BAD_REQUEST, "Bad Request".to_string()));
                 }
             };
-            let file_name = file.file_name().unwrap_or_default();
+            let file_name = file.file_name().unwrap_or_default().to_owned();
             if file_name.is_empty() || file_name.len() > 255 {
                 return Err((StatusCode::BAD_REQUEST, "Bad Request".to_owned()));
             }
 
-            let store_file_name = utils::hashed_filename(file_name);
-            let f = fs::File::create(Path::new(&state.store_file_path).join(file_name))
+            let store_file_name = utils::hashed_filename(&file_name);
+            let mut f = fs::File::create(Path::new(&state.store_file_path).join(&file_name))
                 .await
                 .unwrap();
 
@@ -142,10 +142,10 @@ async fn upload(
             sqlx::query(
                 "INSERT INTO files (name, token, user_uuid, store_name) VALUES (?, ?, ?, ?)",
             )
-            .bind(file_name)
-            .bind(token)
-            .bind(user)
-            .bind(store_file_name)
+            .bind(&file_name)
+            .bind(&token)
+            .bind(&user)
+            .bind(&store_file_name)
             .execute(&*state.db)
             .await
             .map_err(|_| {
@@ -175,24 +175,26 @@ struct DownloadQuery {
 async fn download(
     id: String,
     state: Extension<AppState>,
-    req: DownloadQuery,
+    mut req: DownloadQuery,
 ) -> Result<Response<StreamBody<ReaderStream<impl AsyncRead>>>, (StatusCode, String)> {
-    if !utils::check_token(&req.token.unwrap_or_default(), 6, 32) {
+    let token = req.token.take().unwrap_or_default();
+
+    if !utils::check_token(&token, 6, 32) {
         return Err((StatusCode::NOT_FOUND, "404 Not Found".to_owned()));
     }
 
     let filename = match sqlx::query("SELECT name FROM files WHERE store_name = ? AND token = ?")
         .bind(id)
-        .bind(req.token)
+        .bind(&token)
         .fetch_one(&*state.db)
         .await
     {
-        Ok(x) => x.get(0) as String,
+        Ok(x) => x.get::<String, _>(0),
         _ => {
             return Err((StatusCode::NOT_FOUND, "404 Not Found".to_string()));
         }
     };
-    let path = Path::new(&state.store_file_path).join(filename);
+    let path = Path::new(&state.store_file_path).join(&filename);
     fs::try_exists(&path)
         .await
         .and(fs::File::open(&path).await)
@@ -203,7 +205,7 @@ async fn download(
                 .status(StatusCode::OK)
                 .header(
                     header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"{}\"", filename),
+                    format!("attachment; filename=\"{}\"", &filename),
                 )
                 .body(body)
                 .unwrap()
