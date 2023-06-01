@@ -11,6 +11,7 @@ axum = { version = "0.6.10", features = ["macros", "multipart", "ws", "headers",
 clap = { version = "4.1.8", features = ["derive"] }
 futures-core = "0.3.28"
 futures-util = "0.3.27"
+lazy_static = "1.4.0"
 num = "0.4.0"
 rand = "0.8.5"
 regex = "1.7.1"

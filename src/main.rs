@@ -25,7 +25,7 @@ struct Config {
     #[arg(long = "db", default_value = "./db.sqlite")]
     db_path: String,
 
-    #[arg(long, short, default_value = ":8080")]
+    #[arg(long, short, default_value = "127.0.0.1:8080")]
     bind: String,
 
     #[arg(long = "store", short, default_value = "./store")]
@@ -42,7 +42,41 @@ struct AppState {
 async fn main() {
     let arg = Config::parse();
 
-    let db = sqlx::AnyPool::connect_lazy(&format!("sqlite://{}", arg.db_path)).unwrap();
+    let db_opt = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(arg.db_path.to_owned())
+        .create_if_missing(true);
+    let db = sqlx::AnyPool::connect_lazy_with(db_opt.into());
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1
+        );
+    "#,
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            token TEXT NOT NULL,
+            user_uuid TEXT NOT NULL,
+            store_name TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    "#,
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    std::fs::create_dir_all(&arg.store_file_path).unwrap();
 
     let state = AppState {
         store_file_path: arg.store_file_path.to_owned(),
@@ -53,6 +87,7 @@ async fn main() {
         .route("/download/:id", get(download))
         .with_state(Arc::new(state));
 
+    println!("Listening on http://{}", arg.bind);
     let result = axum::Server::bind(&arg.bind.parse().unwrap())
         .serve(app.into_make_service())
         .await;
