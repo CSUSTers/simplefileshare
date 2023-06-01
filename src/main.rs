@@ -49,12 +49,12 @@ async fn main() {
 
     sqlx::query(
         r#"
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uuid TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS users
+        (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid    TEXT    NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1
-        );
-    "#,
+        );"#,
     )
     .execute(&db)
     .await
@@ -62,15 +62,16 @@ async fn main() {
 
     sqlx::query(
         r#"
-        CREATE TABLE IF NOT EXISTS files (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            token TEXT NOT NULL,
-            user_uuid TEXT NOT NULL,
-            store_name TEXT NOT NULL,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-    "#,
+        CREATE TABLE IF NOT EXISTS files
+        (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT    NOT NULL,
+            token      TEXT    NOT NULL,
+            user_uuid  TEXT    NOT NULL,
+            store_name TEXT    NOT NULL,
+            created_at INTEGER DEFAULT NULL,
+            dead_at    INTEGER DEFAULT NULL
+        );"#,
     )
     .execute(&db)
     .await
@@ -102,6 +103,7 @@ async fn main() {
 #[derive(Debug, Clone, serde::Deserialize)]
 struct UploadQuery {
     token: Option<String>,
+    live: Option<i64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -118,10 +120,18 @@ async fn upload(
     mut body: Multipart,
 ) -> Result<Json<UploadResponse>, (StatusCode, String)> {
     if let Some(user) = header.get("user-uuid") {
-        let user = user.to_str().unwrap();
-        if !utils::check_uuid(user) {
-            return Err((StatusCode::FORBIDDEN, "403 For Biden".to_owned()));
-        }
+        let err_403 = (StatusCode::FORBIDDEN, "403 For Biden".to_owned());
+        let err_400 = (StatusCode::BAD_REQUEST, "400 Bad Request".to_owned());
+        let err_500 = (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "500 Server Error".to_owned(),
+        );
+
+        let user = user
+            .to_str()
+            .or(Err(()))
+            .and_then(|u| if utils::check_uuid(u) { Ok(u) } else { Err(()) })
+            .map_err(|_| err_403.to_owned())?;
 
         match sqlx::query("SELECT count(id) FROM users WHERE uuid = ? AND enabled = 1")
             .bind(user)
@@ -131,15 +141,10 @@ async fn upload(
             Ok(row) => {
                 let c: i32 = row.get(0);
                 if c == 0 {
-                    return Err((StatusCode::FORBIDDEN, "403 For Biden".to_string()));
+                    return Err(err_403);
                 }
             }
-            Err(_) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "500 Server Error".to_owned(),
-                ))
-            }
+            Err(_) => return Err(err_500),
         }
 
         let token = match param.token.unwrap_or_default() {
@@ -147,15 +152,24 @@ async fn upload(
             _ => utils::ramdom_string(12),
         };
 
+        let now = chrono::Utc::now().timestamp_millis();
+
+        let dead_at = match param.live {
+            Some(x) if x > 0 && x < chrono::Duration::days(365 * 10).num_milliseconds() => {
+                Some(now + x)
+            }
+            _ => None,
+        };
+
         let file = match body.next_field().await {
             Ok(Some(x)) => x,
             _ => {
-                return Err((StatusCode::BAD_REQUEST, "Bad Request".to_string()));
+                return Err(err_400);
             }
         };
         let file_name = file.file_name().unwrap_or_default().to_owned();
         if file_name.is_empty() || file_name.len() > 255 {
-            return Err((StatusCode::BAD_REQUEST, "Bad Request".to_owned()));
+            return Err(err_400);
         }
 
         let store_file_name = utils::hashed_filename(&file_name);
@@ -166,25 +180,18 @@ async fn upload(
         let mut reader = StreamReader::new(file.map_err(|e| tokio::io::Error::other(e)));
         tokio::io::copy_buf(&mut reader, &mut f)
             .await
-            .map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "500 Server Error".to_string(),
-                )
-            })?;
+            .map_err(|_| err_500.to_owned())?;
 
-        sqlx::query("INSERT INTO files (name, token, user_uuid, store_name) VALUES (?, ?, ?, ?)")
+        sqlx::query("INSERT INTO files (name, token, user_uuid, store_name, created_at, dead_at) VALUES (?, ?, ?, ?, ?, ?)")
             .bind(&file_name)
             .bind(&token)
-            .bind(&user)
+            .bind(user)
             .bind(&store_file_name)
+            .bind(now)
+            .bind(dead_at)
             .execute(&state.db)
             .await
-            .map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "500 Server Error".to_string(),
-                )
+            .map_err(|_| {err_500.to_owned()
             })?;
 
         return Ok(UploadResponse {
