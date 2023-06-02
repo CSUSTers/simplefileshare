@@ -5,6 +5,10 @@
         "ghcr.io/devcontainers/features/rust:1": {
             "version": "nightly",
             "profile": "default"
+        },
+        "ghcr.io/eitsupi/devcontainer-features/jq-likes:1": {},
+        "ghcr.io/devcontainers/features/java:1": {
+            "version": "17"
         }
     },
     "customizations": {
@@ -17,7 +21,8 @@
                 "eamodio.gitlens",
                 "lfs.vscode-emacs-friendly",
                 "esbenp.prettier-vscode",
-                "alexcvzz.vscode-sqlite"
+                "alexcvzz.vscode-sqlite",
+                "SonarSource.sonarlint-vscode"
             ]
 		}
     }
