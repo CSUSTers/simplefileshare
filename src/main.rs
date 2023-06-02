@@ -75,7 +75,8 @@ async fn main() {
             user_uuid  TEXT    NOT NULL,
             store_name TEXT    NOT NULL,
             created_at INTEGER DEFAULT NULL,
-            dead_at    INTEGER DEFAULT NULL
+            dead_at    INTEGER DEFAULT NULL,
+            avaiable   INTEGER NOT NULL DEFAULT 1
         );"#,
     )
     .execute(&db)
@@ -164,14 +165,18 @@ async fn upload(
         if let Some(content_length_header) = header.get(axum::http::header::CONTENT_LENGTH) {
             content_length_header
                 .to_str()
-                .or(Err(()))
-                .and_then(|s| s.parse().or(Err(())))
                 .or(Err(err_400.to_owned()))
-                .and_then(|x: i64| {
-                    if x > state.max_upload_content_length {
-                        Err(err_413)
-                    } else {
+                .and_then(|s| {
+                    if s.trim().is_empty() {
                         Ok(())
+                    } else {
+                        s.parse().or(Err(err_400.to_owned())).and_then(|x: i64| {
+                            if x > state.max_upload_content_length {
+                                Err(err_413)
+                            } else {
+                                Ok(())
+                            }
+                        })
                     }
                 })?;
         }
@@ -192,9 +197,7 @@ async fn upload(
 
         let file = match body.next_field().await {
             Ok(Some(x)) => x,
-            _ => {
-                return Err(err_400);
-            }
+            _ => return Err(err_400),
         };
         let file_name = file.file_name().unwrap_or_default().to_owned();
         if file_name.is_empty() || file_name.len() > 255 {
@@ -202,14 +205,28 @@ async fn upload(
         }
 
         let store_file_name = utils::hashed_filename(&file_name);
-        let mut f = fs::File::create(Path::new(&state.store_file_path).join(&store_file_name))
-            .await
-            .unwrap();
+        let store_file_path = Path::new(&state.store_file_path).join(&store_file_name);
+        let mut f = fs::File::create(&store_file_path).await.unwrap();
 
         let mut reader = StreamReader::new(file.map_err(|e| tokio::io::Error::other(e)));
+
+        let remove_file_fn = || {
+            std::fs::remove_file(&store_file_path).unwrap_or_else(|e| {
+                println!(
+                    "remove file '{}' error: {}",
+                    store_file_path.to_str().unwrap_or("???"),
+                    e
+                );
+                ()
+            });
+        };
+
         tokio::io::copy_buf(&mut reader, &mut f)
             .await
-            .map_err(|_| err_500.to_owned())?;
+            .map_err(|_| {
+                remove_file_fn();
+                err_400.to_owned()
+            })?;
 
         sqlx::query("INSERT INTO files (name, token, user_uuid, store_name, created_at, dead_at) VALUES (?, ?, ?, ?, ?, ?)")
             .bind(&file_name)
@@ -220,7 +237,9 @@ async fn upload(
             .bind(dead_at)
             .execute(&state.db)
             .await
-            .map_err(|_| {err_500.to_owned()
+            .map_err(|_| {
+                remove_file_fn();
+                err_500.to_owned()
             })?;
 
         return Ok(UploadResponse {
@@ -249,7 +268,7 @@ async fn download(
         return Err((StatusCode::NOT_FOUND, "404 Not Found".to_owned()));
     }
 
-    let filename = match sqlx::query("SELECT name FROM files WHERE store_name = ? AND token = ?")
+    let filename = match sqlx::query("SELECT name FROM files WHERE store_name = ? AND token = ? AND avaiable = true")
         .bind(id.as_str())
         .bind(&token)
         .fetch_one(&state.db)
