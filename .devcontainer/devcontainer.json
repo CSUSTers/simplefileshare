@@ -1,0 +1,6 @@
+{
+    "image": "mcr.microsoft.com/devcontainers/rust",
+    "features": {
+        "ghcr.io/devcontainers/features/rust:1": {}
+    }
+}
