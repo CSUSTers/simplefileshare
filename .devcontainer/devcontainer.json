@@ -16,7 +16,7 @@
             },
 			"extensions": [
                 "eamodio.gitlens",
-                "tuttieee.emacs-mcx",
+                // "tuttieee.emacs-mcx",
                 "esbenp.prettier-vscode",
                 "alexcvzz.vscode-sqlite"
             ]
