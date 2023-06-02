@@ -1,5 +1,5 @@
 {
-    "image": "mcr.microsoft.com/devcontainers/rust",
+    "image": "mcr.microsoft.com/devcontainers/universal",
     "features": {
         "ghcr.io/devcontainers/features/common-utils:2": {},
         "ghcr.io/devcontainers/features/rust:1": {
@@ -16,7 +16,7 @@
             },
 			"extensions": [
                 "eamodio.gitlens",
-                "lfs.vscode-emacs-friendly",
+                "tuttieee.emacs-mcx",
                 "esbenp.prettier-vscode",
                 "alexcvzz.vscode-sqlite"
             ]
