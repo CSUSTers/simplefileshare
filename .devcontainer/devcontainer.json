@@ -1,5 +1,7 @@
 {
+    "image": "mcr.microsoft.com/devcontainers/rust",
     "features": {
+        "ghcr.io/devcontainers/features/common-utils:2": {},
         "ghcr.io/devcontainers/features/rust:1": {
             "version": "nightly",
             "profile": "default"
