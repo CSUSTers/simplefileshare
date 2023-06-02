@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use axum::{
     body::StreamBody,
-    extract::{self, Multipart, Query, State},
+    extract::{self, Multipart, Query, State, DefaultBodyLimit},
     http::{header, HeaderMap, Response, StatusCode},
     routing::*,
     Json, Router,
@@ -30,6 +30,10 @@ struct Config {
 
     #[arg(long = "store", short, default_value = "./store")]
     store_file_path: String,
+
+    // 最大文件大小，单位MB
+    #[arg(long, short, default_value = "10")]
+    max_file_size: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -86,7 +90,8 @@ async fn main() {
     let app = Router::new()
         .route("/upload", post(upload))
         .route("/download/:id", get(download))
-        .with_state(Arc::new(state));
+        .with_state(Arc::new(state))
+        .layer(DefaultBodyLimit::max(arg.max_file_size * 1024 * 1024));
 
     println!("Listening on http://{}", arg.bind);
     let result = axum::Server::bind(&arg.bind.parse().unwrap())
@@ -173,7 +178,7 @@ async fn upload(
         }
 
         let store_file_name = utils::hashed_filename(&file_name);
-        let mut f = fs::File::create(Path::new(&state.store_file_path).join(&file_name))
+        let mut f = fs::File::create(Path::new(&state.store_file_path).join(&store_file_name))
             .await
             .unwrap();
 
