@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use axum::{
     body::StreamBody,
-    extract::{self, Multipart, Query, State, DefaultBodyLimit},
+    extract::{self, DefaultBodyLimit, Multipart, Query, State},
     http::{header, HeaderMap, Response, StatusCode},
     routing::*,
     Json, Router,
@@ -40,6 +40,7 @@ struct Config {
 struct AppState {
     store_file_path: String,
     db: sqlx::Pool<sqlx::Any>,
+    max_upload_content_length: i64,
 }
 
 #[tokio::main]
@@ -86,6 +87,7 @@ async fn main() {
     let state = AppState {
         store_file_path: arg.store_file_path.to_owned(),
         db,
+        max_upload_content_length: (arg.max_file_size as i64) * (1 << 20),
     };
     let app = Router::new()
         .route("/upload", post(upload))
@@ -94,14 +96,20 @@ async fn main() {
         .layer(DefaultBodyLimit::max(arg.max_file_size * 1024 * 1024));
 
     println!("Listening on http://{}", arg.bind);
+    let (exit_tx, mut exit_rx) = tokio::sync::broadcast::channel(1);
+
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.expect("recv signal error");
+        println!("received CTRL-C signal");
+        exit_tx.send(true).expect("notify threads to exit error");
+    });
     let result = axum::Server::bind(&arg.bind.parse().unwrap())
         .serve(app.into_make_service())
+        .with_graceful_shutdown(async move { while exit_rx.recv().await.unwrap_or(false) {} })
         .await;
     match result {
-        Ok(_) => {}
-        Err(e) => {
-            println!("Error: {}", e);
-        }
+        Ok(_) => println!("server exited"),
+        Err(e) => println!("Error: {}", e),
     }
 }
 
@@ -127,9 +135,10 @@ async fn upload(
     if let Some(user) = header.get("user-uuid") {
         let err_403 = (StatusCode::FORBIDDEN, "403 For Biden".to_owned());
         let err_400 = (StatusCode::BAD_REQUEST, "400 Bad Request".to_owned());
+        let err_413 = (StatusCode::PAYLOAD_TOO_LARGE, "File too LARGE".to_owned());
         let err_500 = (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "500 Server Error".to_owned(),
+            "500 Server Internal Error".to_owned(),
         );
 
         let user = user
@@ -150,6 +159,21 @@ async fn upload(
                 }
             }
             Err(_) => return Err(err_500),
+        }
+
+        if let Some(content_length_header) = header.get(axum::http::header::CONTENT_LENGTH) {
+            content_length_header
+                .to_str()
+                .or(Err(()))
+                .and_then(|s| s.parse().or(Err(())))
+                .or(Err(err_400.to_owned()))
+                .and_then(|x: i64| {
+                    if x > state.max_upload_content_length {
+                        Err(err_413)
+                    } else {
+                        Ok(())
+                    }
+                })?;
         }
 
         let token = match param.token.unwrap_or_default() {
@@ -236,7 +260,7 @@ async fn download(
             return Err((StatusCode::NOT_FOUND, "404 Not Found".to_string()));
         }
     };
-    let path = Path::new(&state.store_file_path).join(&filename);
+    let path = Path::new(&state.store_file_path).join(&id);
     fs::try_exists(&path)
         .await
         .and(fs::File::open(&path).await)
