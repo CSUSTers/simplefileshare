@@ -1,5 +1,5 @@
 {
-    "image": "mcr.microsoft.com/devcontainers/rust",
+    // "image": "mcr.microsoft.com/devcontainers/rust",
     "features": {
         "ghcr.io/devcontainers/features/rust:1": {
             "version": "nightly",
@@ -8,7 +8,10 @@
     },
     "customizations": {
         "vscode": {
-			"settings": {},
+			"settings": {
+                "gitlens.showWelcomeOnInstall": false,
+                "gitlens.showWhatsNewAfterUpgrades": false
+            },
 			"extensions": [
                 "eamodio.gitlens",
                 "lfs.vscode-emacs-friendly",
