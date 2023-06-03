@@ -23,7 +23,7 @@ jobs:
           components: clippy
       
     - name: Clippy
-      run: cargo clippy --fix
+      run: cargo clippy --no-deps --all-targets
       
     - name: Run tests
       run: cargo test -v
