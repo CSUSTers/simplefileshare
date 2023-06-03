@@ -1,4 +1,4 @@
-name: Rust
+name: on-push
 
 on:
   push:
@@ -10,10 +10,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  check-test:
     runs-on: ubuntu-latest
-
+    
     steps:
     - uses: actions/checkout@v3
     
@@ -24,10 +23,10 @@ jobs:
           components: clippy
     
     - name: Cargo check
-      run: cargo check -V
+      run: cargo check -v
       
     - name: Run tests
-      run: cargo test -V
+      run: cargo test -v
       
     - name: Clippy
       run: cargo clippy --fix
