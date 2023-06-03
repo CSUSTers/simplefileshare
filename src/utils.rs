@@ -30,6 +30,8 @@ pub fn check_token(s: &str, min_len: usize, max_len: usize) -> bool {
     if s.len() < min_len || s.len() > max_len {
         return false;
     }
-    let patt = regex::Regex::new(r"^[a-zA-Z0-9]+$").unwrap();
-    patt.is_match(s)
+    lazy_static! {
+        static ref PATT: regex::Regex = regex::Regex::new(r"^[a-zA-Z0-9]+$").unwrap();
+    }
+    PATT.is_match(s)
 }

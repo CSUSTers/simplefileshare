@@ -48,7 +48,7 @@ async fn main() {
     let arg = Config::parse();
 
     let db_opt = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(arg.db_path.to_owned())
+        .filename(&arg.db_path)
         .create_if_missing(true);
     let db = sqlx::AnyPool::connect_lazy_with(db_opt.into());
 
@@ -208,7 +208,7 @@ async fn upload(
         let store_file_path = Path::new(&state.store_file_path).join(&store_file_name);
         let mut f = fs::File::create(&store_file_path).await.unwrap();
 
-        let mut reader = StreamReader::new(file.map_err(|e| tokio::io::Error::other(e)));
+        let mut reader = StreamReader::new(file.map_err(tokio::io::Error::other));
 
         let remove_file_fn = || {
             std::fs::remove_file(&store_file_path).unwrap_or_else(|e| {
@@ -217,7 +217,6 @@ async fn upload(
                     store_file_path.to_str().unwrap_or("???"),
                     e
                 );
-                ()
             });
         };
 
