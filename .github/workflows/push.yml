@@ -21,12 +21,10 @@ jobs:
           toolchain: nightly
           override: true
           components: clippy
-    
-    - name: Cargo check
-      run: cargo check -v
+      
+    - name: Clippy
+      run: cargo clippy --fix
       
     - name: Run tests
       run: cargo test -v
       
-    - name: Clippy
-      run: cargo clippy --fix
