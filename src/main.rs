@@ -10,7 +10,7 @@ use axum::{
     extract::{self, DefaultBodyLimit, Multipart, Query, State},
     http::{header, HeaderMap, Response, StatusCode},
     routing::*,
-    Json, Router,
+    Json, Router, response::IntoResponse,
 };
 use clap::Parser;
 
@@ -126,27 +126,48 @@ struct UploadResponse {
     id: String,
 }
 
+enum HTTPError {
+    ConstErr(StatusCode, &'static str),
+
+    #[allow(unused)]
+    CustomErr(StatusCode, String),
+}
+
+impl HTTPError {
+    const ERR_400: Self = Self::ConstErr(StatusCode::BAD_REQUEST, "400 Bad Request");
+    const ERR_403: Self = Self::ConstErr(StatusCode::FORBIDDEN, "403 For Biden");
+    const ERR_404: Self = Self::ConstErr(StatusCode::NOT_FOUND, "404 Not Found");
+    const ERR_413: Self = Self::ConstErr(StatusCode::PAYLOAD_TOO_LARGE, "File too LARGE");
+    const ERR_500: Self = Self::ConstErr(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "500 Server Internal Error",
+    );
+}
+
+impl IntoResponse for HTTPError {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            Self::ConstErr(code, msg) => (code, msg).into_response(),
+            Self::CustomErr(code, msg) => (code, msg).into_response()
+        }
+    }
+}
+
+
+
 #[axum::debug_handler]
 async fn upload(
     header: HeaderMap,
     Query(param): Query<UploadQuery>,
     State(state): State<Arc<AppState>>,
     mut body: Multipart,
-) -> Result<Json<UploadResponse>, (StatusCode, String)> {
+) -> Result<Json<UploadResponse>, HTTPError> {
     if let Some(user) = header.get("user-uuid") {
-        let err_403 = (StatusCode::FORBIDDEN, "403 For Biden".to_owned());
-        let err_400 = (StatusCode::BAD_REQUEST, "400 Bad Request".to_owned());
-        let err_413 = (StatusCode::PAYLOAD_TOO_LARGE, "File too LARGE".to_owned());
-        let err_500 = (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "500 Server Internal Error".to_owned(),
-        );
-
         let user = user
             .to_str()
             .or(Err(()))
             .and_then(|u| if utils::check_uuid(u) { Ok(u) } else { Err(()) })
-            .map_err(|_| err_403.to_owned())?;
+            .map_err(|_| HTTPError::ERR_403)?;
 
         match sqlx::query("SELECT count(id) FROM users WHERE uuid = ? AND enabled = 1")
             .bind(user)
@@ -156,23 +177,23 @@ async fn upload(
             Ok(row) => {
                 let c: i32 = row.get(0);
                 if c == 0 {
-                    return Err(err_403);
+                    return Err(HTTPError::ERR_403);
                 }
             }
-            Err(_) => return Err(err_500),
+            Err(_) => return Err(HTTPError::ERR_500),
         }
 
         if let Some(content_length_header) = header.get(axum::http::header::CONTENT_LENGTH) {
             content_length_header
                 .to_str()
-                .or(Err(err_400.to_owned()))
+                .or(Err(HTTPError::ERR_400))
                 .and_then(|s| {
                     if s.trim().is_empty() {
                         Ok(())
                     } else {
-                        s.parse().or(Err(err_400.to_owned())).and_then(|x: i64| {
+                        s.parse().or(Err(HTTPError::ERR_400)).and_then(|x: i64| {
                             if x > state.max_upload_content_length {
-                                Err(err_413)
+                                Err(HTTPError::ERR_413)
                             } else {
                                 Ok(())
                             }
@@ -197,11 +218,11 @@ async fn upload(
 
         let file = match body.next_field().await {
             Ok(Some(x)) => x,
-            _ => return Err(err_400),
+            _ => return Err(HTTPError::ERR_400),
         };
         let file_name = file.file_name().unwrap_or_default().to_owned();
         if file_name.is_empty() || file_name.len() > 255 {
-            return Err(err_400);
+            return Err(HTTPError::ERR_400);
         }
 
         let store_file_name = utils::hashed_filename(&file_name);
@@ -224,7 +245,7 @@ async fn upload(
             .await
             .map_err(|_| {
                 remove_file_fn();
-                err_400.to_owned()
+                HTTPError::ERR_400
             })?;
 
         sqlx::query("INSERT INTO files (name, token, user_uuid, store_name, created_at, dead_at) VALUES (?, ?, ?, ?, ?, ?)")
@@ -238,7 +259,7 @@ async fn upload(
             .await
             .map_err(|_| {
                 remove_file_fn();
-                err_500.to_owned()
+                HTTPError::ERR_500
             })?;
 
         return Ok(UploadResponse {
@@ -247,7 +268,7 @@ async fn upload(
         }
         .into());
     }
-    Err((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()))
+    Err(HTTPError::ConstErr(StatusCode::UNAUTHORIZED, "Unauthorized"))
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -260,11 +281,11 @@ async fn download(
     extract::Path(id): extract::Path<String>,
     Query(mut req): Query<DownloadQuery>,
     State(state): State<Arc<AppState>>,
-) -> Result<Response<StreamBody<ReaderStream<impl AsyncRead>>>, (StatusCode, String)> {
+) -> Result<Response<StreamBody<ReaderStream<impl AsyncRead>>>, HTTPError> {
     let token = req.token.take().unwrap_or_default();
 
     if !utils::check_token(&token, 6, 32) {
-        return Err((StatusCode::NOT_FOUND, "404 Not Found".to_owned()));
+        return Err(HTTPError::ERR_404);
     }
 
     let filename = match sqlx::query(
@@ -277,7 +298,7 @@ async fn download(
     {
         Ok(x) => x.get::<String, _>(0),
         _ => {
-            return Err((StatusCode::NOT_FOUND, "404 Not Found".to_string()));
+            return Err(HTTPError::ERR_404);
         }
     };
     let path = Path::new(&state.store_file_path).join(&id);
@@ -296,5 +317,5 @@ async fn download(
                 .body(body)
                 .unwrap()
         })
-        .map_err(|_| (StatusCode::NOT_FOUND, "404 Not Found".to_string()))
+        .map_err(|_| HTTPError::ERR_404)
 }
