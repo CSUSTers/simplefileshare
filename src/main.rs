@@ -267,11 +267,13 @@ async fn download(
         return Err((StatusCode::NOT_FOUND, "404 Not Found".to_owned()));
     }
 
-    let filename = match sqlx::query("SELECT name FROM files WHERE store_name = ? AND token = ? AND avaiable = true")
-        .bind(id.as_str())
-        .bind(&token)
-        .fetch_one(&state.db)
-        .await
+    let filename = match sqlx::query(
+        "SELECT name FROM files WHERE store_name = ? AND token = ? AND avaiable = true",
+    )
+    .bind(id.as_str())
+    .bind(&token)
+    .fetch_one(&state.db)
+    .await
     {
         Ok(x) => x.get::<String, _>(0),
         _ => {
