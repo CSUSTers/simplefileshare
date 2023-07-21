@@ -7,7 +7,7 @@ authors = ["Hugefiver", "Anthony Hoo"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-axum = { version = "0.6.10", features = ["macros", "multipart", "ws", "headers", "http2"] }
+axum = { version = "0.6.19", features = ["macros", "multipart", "ws", "headers", "http2"] }
 chrono = "0.4.26"
 clap = { version = "4.3.17", features = ["derive"] }
 futures-util = "0.3.27"
