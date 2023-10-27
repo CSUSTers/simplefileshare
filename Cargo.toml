@@ -10,7 +10,7 @@ authors = ["Hugefiver", "Anthony Hoo"]
 axum = { version = "0.6.20", features = ["macros", "multipart", "ws", "headers", "http2"] }
 chrono = "0.4.31"
 clap = { version = "4.4.6", features = ["derive"] }
-futures-util = "0.3.27"
+futures-util = "0.3.29"
 lazy_static = "1.4.0"
 num = "0.4.1"
 rand = "0.8.5"
