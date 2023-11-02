@@ -16,7 +16,7 @@ num = "0.4.1"
 rand = "0.8.5"
 regex = "1.10.2"
 serde = { version = "1.0.190", features = ["derive", "serde_derive"] }
-serde_json = "1.0.107"
+serde_json = "1.0.108"
 sqlx = { version = "0.6.2", features = ["sqlite", "uuid", "macros", "chrono", "offline", "runtime-tokio-rustls", "any"] }
 tokio = { version = "1.33.0", features = ["full"] }
 tokio-util = { version = "0.7.10", features = ["io"] }
