@@ -9,7 +9,7 @@ authors = ["Hugefiver", "Anthony Hoo"]
 [dependencies]
 axum = { version = "0.6.20", features = ["macros", "multipart", "ws", "headers", "http2"] }
 chrono = "0.4.31"
-clap = { version = "4.4.10", features = ["derive"] }
+clap = { version = "4.4.13", features = ["derive"] }
 futures-util = "0.3.29"
 lazy_static = "1.4.0"
 num = "0.4.1"
